@@ -7,7 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class TemporalPocApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(TemporalPocApplication.class, args);
+        SpringApplication.run(TemporalPocApplication.class, args);
 	}
 
 }
