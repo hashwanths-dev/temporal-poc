@@ -61,27 +61,26 @@ public class MoneyTransferWorkflowImpl implements MoneyTransferWorkflow {
 
     private void processBranch(String agentAccount, String poolAccount, BranchRequest branch) {
         Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
-
         try {
-            activities.transfer(
-                    poolAccount,
-                    branch.getRailAccount(),
-                    branch.getAmount(),
-                    branch.getType()
-            );
-
-            saga.addCompensation(
-                    activities::compensate,
-                    branch.getRailAccount(),
-                    poolAccount,
-                    branch.getAmount(),
-                    branch.getType()
-            );
-
             saga.addCompensation(
                     activities::compensate,
                     poolAccount,
                     agentAccount,
+                    branch.getAmount(),
+                    RailType.INTERNAL
+            );
+
+            activities.transfer(
+                    poolAccount,
+                    branch.getRailAccount(),
+                    branch.getAmount(),
+                    RailType.INTERNAL
+            );
+
+            saga.addCompensation(
+                    activities::compensate,
+                    branch.getRailAccount(),
+                    poolAccount,
                     branch.getAmount(),
                     RailType.INTERNAL
             );
@@ -106,7 +105,7 @@ public class MoneyTransferWorkflowImpl implements MoneyTransferWorkflow {
 
             } catch (ActivityFailure e) {
                 log.error("Customer Transaction failed for customer: {} . Reverting lineage", leaf.getCustomerAccount());
-                activities.compensate(branch.getRailAccount(), poolAccount, leaf.getAmount(), branch.getType());
+                activities.compensate(branch.getRailAccount(), poolAccount, leaf.getAmount(), RailType.INTERNAL);
                 activities.compensate(poolAccount, agentAccount, leaf.getAmount(), RailType.INTERNAL);
             }
         }
