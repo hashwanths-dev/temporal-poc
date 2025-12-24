@@ -2,18 +2,25 @@ package com.example.temporal_poc.workflow;
 
 import com.example.temporal_poc.activities.BankingActivities;
 import com.example.temporal_poc.constants.Constants;
-import com.example.temporal_poc.models.TransactionNode;
+import com.example.temporal_poc.models.*;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
 import io.temporal.failure.ActivityFailure;
 import io.temporal.spring.boot.WorkflowImpl;
+import io.temporal.workflow.Async;
+import io.temporal.workflow.Promise;
+import io.temporal.workflow.Saga;
 import io.temporal.workflow.Workflow;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import org.slf4j.Logger;
 
 @WorkflowImpl(taskQueues = Constants.BANKING_TASK_QUEUE)
 public class MoneyTransferWorkflowImpl implements MoneyTransferWorkflow {
+
+    private static final Logger log = Workflow.getLogger(MoneyTransferWorkflowImpl.class);
 
     private final BankingActivities activities = Workflow.newActivityStub(
             BankingActivities.class,
@@ -21,33 +28,87 @@ public class MoneyTransferWorkflowImpl implements MoneyTransferWorkflow {
                     .setStartToCloseTimeout(Duration.ofSeconds(10))
                     .setRetryOptions(RetryOptions.newBuilder()
                             .setMaximumAttempts(3)
+                            .setBackoffCoefficient(2.0)
                             .build())
                     .build());
 
     @Override
-    public void execute(List<TransactionNode> transactions) {
-        for (TransactionNode transaction : transactions) {
-            try {
-                activities.transfer(transaction.getFromAccount(), transaction.getToAccount(), transaction.getAmount() );
-            } catch (ActivityFailure e) {
-                rollbackTransaction(transaction);
-                throw e;
-            }
+    public void execute(RootRequest request) {
+        log.info("Starting Batch Workflow for Agent: {}", request.getAgentAccount());
+
+        activities.transfer(
+                request.getAgentAccount(),
+                request.getPoolAccount(),
+                request.getTotalAmount(),
+                RailType.INTERNAL
+        );
+
+        List<Promise<Void>> branchPromises = new ArrayList<>();
+
+        for (BranchRequest branch : request.getBranches()) {
+            branchPromises.add(Async.procedure(() ->
+                    processBranch(
+                            request.getAgentAccount(),
+                            request.getPoolAccount(),
+                            branch)
+            ));
+        }
+
+        Promise.allOf(branchPromises).get();
+
+        log.info("Batch Workflow completed for Agent: {}", request.getAgentAccount());
+    }
+
+    private void processBranch(String agentAccount, String poolAccount, BranchRequest branch) {
+        Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
+
+        try {
+            activities.transfer(
+                    poolAccount,
+                    branch.getRailAccount(),
+                    branch.getAmount(),
+                    branch.getType()
+            );
+
+            saga.addCompensation(
+                    activities::compensate,
+                    branch.getRailAccount(),
+                    poolAccount,
+                    branch.getAmount(),
+                    branch.getType()
+            );
+
+            saga.addCompensation(
+                    activities::compensate,
+                    poolAccount,
+                    agentAccount,
+                    branch.getAmount(),
+                    RailType.INTERNAL
+            );
+
+            processLeaves(branch, agentAccount, poolAccount);
+
+        } catch (ActivityFailure e) {
+            log.error("Branch level failure for {}. Reversing branch total.", branch.getType());
+            saga.compensate();
         }
     }
 
-    private void rollbackTransaction(TransactionNode failed_transaction) {
-        double amountToRefund = failed_transaction.getAmount();
-        TransactionNode current = failed_transaction;
-
-        while(current != null) {
+    private void processLeaves(BranchRequest branch, String agentAccount, String poolAccount) {
+        for (LeafRequest leaf : branch.getLeaves()) {
             try {
-                activities.reverse_transfer(current.getFromAccount(), current.getToAccount(), amountToRefund);
-            } catch (Exception e) {
-                Workflow.getLogger(this.getClass()).error("Unable to rollback transaction {}", current.getToAccount(), e);
-            }
+                activities.transfer(
+                        branch.getRailAccount(),
+                        leaf.getCustomerAccount(),
+                        leaf.getAmount(),
+                        branch.getType()
+                );
 
-            current = current.getParent();
+            } catch (ActivityFailure e) {
+                log.error("Customer Transaction failed for customer: {} . Reverting lineage", leaf.getCustomerAccount());
+                activities.compensate(branch.getRailAccount(), poolAccount, leaf.getAmount(), branch.getType());
+                activities.compensate(poolAccount, agentAccount, leaf.getAmount(), RailType.INTERNAL);
+            }
         }
     }
 }

@@ -4,12 +4,14 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
-@AllArgsConstructor
 @NoArgsConstructor
-public class TransactionNode {
-    private String fromAccount;
-    private String toAccount;
+@AllArgsConstructor
+public class BranchRequest {
+    private String railAccount;
     private double amount;
-    private TransactionNode parent;
+    private List<LeafRequest> leaves;
+    private RailType type;
 }

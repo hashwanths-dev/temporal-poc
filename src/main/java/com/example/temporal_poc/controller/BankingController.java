@@ -1,6 +1,7 @@
 package com.example.temporal_poc.controller;
 
-import com.example.temporal_poc.models.TransactionNode;
+import com.example.temporal_poc.constants.Constants;
+import com.example.temporal_poc.models.*;
 import com.example.temporal_poc.workflow.MoneyTransferWorkflow;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.api.enums.v1.WorkflowIdReusePolicy;
@@ -27,23 +28,27 @@ public class BankingController {
         MoneyTransferWorkflow workflow = workflowClient.newWorkflowStub(
                 MoneyTransferWorkflow.class,
                 WorkflowOptions.newBuilder()
-                        .setTaskQueue("BankingTaskQueue")
+                        .setTaskQueue(Constants.BANKING_TASK_QUEUE)
                         .setWorkflowId("transfer-"+transactionId)
                         .setWorkflowIdReusePolicy(WorkflowIdReusePolicy.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE)
                         .build()
         );
 
-        List<TransactionNode> transactions = buildTransactionTree();
+        RootRequest rootRequest = buildRequest();
 
-        WorkflowClient.start(workflow::execute, transactions);
+        WorkflowClient.start(workflow::execute, rootRequest);
 
         return "Transaction flow started in Temporal";
     }
 
-    private List<TransactionNode> buildTransactionTree() {
-        TransactionNode t1 = new TransactionNode("Ag1", "GL1", 3000, null);
-        TransactionNode t3 = new TransactionNode("GL1", "GL-IFT", 1000, t1);
-        TransactionNode t7 = new TransactionNode("GL-IFT", "C3", 1000, t3);
-        return List.of(t1, t3, t7);
+    private RootRequest buildRequest() {
+        LeafRequest leafRequest = new LeafRequest("C1", 1000, "123");
+        LeafRequest leafRequest2 = new LeafRequest("C2", 1000, "123");
+        LeafRequest leafRequest3 = new LeafRequest("C3", 1000, "123");
+        LeafRequest leafRequest4 = new LeafRequest("C4", 1000, "123");
+        BranchRequest b1 = new BranchRequest("GL-NEFT", 2000, List.of(leafRequest, leafRequest2), RailType.NEFT);
+        BranchRequest b2 = new BranchRequest("GL-IFT", 1000, List.of(leafRequest3), RailType.IFT);
+        BranchRequest b3 = new BranchRequest("GL-RTGS", 1000, List.of(leafRequest4), RailType.RTGS);
+        return new RootRequest("Ag1", "GL1", 3000, List.of(b1, b2, b3));
     }
 }
